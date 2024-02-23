@@ -10,13 +10,12 @@ pragma solidity 0.8.20;
 contract LinearBondingCurveTest is Test {
     LinearBondingCurve public linearBondingCurve;
     Token public token;
+    address public user1 = address(1);
     address public user2 = address(2);
-    uint256 public decimals;
 
     function setUp() public {
         linearBondingCurve = new LinearBondingCurve();
         token = linearBondingCurve.token();
-        decimals = linearBondingCurve.decimals();
     }
 
     receive() external payable {}
@@ -24,41 +23,43 @@ contract LinearBondingCurveTest is Test {
     function testInitialValues() public {
         assertEq(token.totalSupply(), 0);
         assertEq(linearBondingCurve.supply(), 0);
+        assertEq(user1.balance, 0);
+        assertEq(user2.balance, 0);
     }
 
     function testFirstBuy() public {
-        deal(address(this), 15 ether);
-        linearBondingCurve.buyToken{value: 15 ether}(5 * decimals);
+        hoax(user1, 12.5 ether);
+        linearBondingCurve.buyToken{value: 12.5 ether}(5 ether);
 
         assertEq(token.totalSupply(), linearBondingCurve.supply());
-        assertEq(linearBondingCurve.supply(), 5 * decimals);
-        assertEq(token.balanceOf(address(this)), 5 * decimals);
+        assertEq(linearBondingCurve.supply(), 5 ether);
+        assertEq(token.balanceOf(user1), 5 ether);
         assertEq(token.balanceOf(address(linearBondingCurve)), 0);
     }
 
     function testSecondBuy() public {
         testFirstBuy();
 
-        hoax(user2, 13 ether);
-        linearBondingCurve.buyToken{value: 13 ether}(2 * decimals);
+        hoax(user2, 12 ether);
+        linearBondingCurve.buyToken{value: 12 ether}(2 ether);
 
         assertEq(token.totalSupply(), linearBondingCurve.supply());
-        assertEq(linearBondingCurve.supply(), 7 * decimals);
-        assertEq(token.balanceOf(user2), 2 * decimals);
+        assertEq(linearBondingCurve.supply(), 7 ether);
+        assertEq(token.balanceOf(user2), 2 ether);
         assertEq(token.balanceOf(address(linearBondingCurve)), 0);
     }
 
     function testSell() public {
         testSecondBuy();
-        skip(601);
 
-        token.approve(address(linearBondingCurve), 5 * decimals);
-        linearBondingCurve.sellToken(1 * decimals);
+        vm.startPrank(user1);
+        token.approve(address(linearBondingCurve), 5 ether);
+        linearBondingCurve.sellToken(1 ether, 6 ether);
 
-        assertEq(address(this).balance, 7 ether);
+        assertEq(user1.balance, 6.5 ether);
         assertEq(token.totalSupply(), linearBondingCurve.supply());
-        assertEq(linearBondingCurve.supply(), 6 * decimals);
-        assertEq(token.balanceOf(address(this)), 4 * decimals);
+        assertEq(linearBondingCurve.supply(), 6 ether);
+        assertEq(token.balanceOf(user1), 4 ether);
         assertEq(token.balanceOf(address(linearBondingCurve)), 0);
     }
 }

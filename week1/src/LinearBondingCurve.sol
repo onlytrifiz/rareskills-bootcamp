@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import {Test, console2} from "forge-std/Test.sol";
 
 pragma solidity 0.8.20;
 
 contract Token is ERC20 {
+
     address public admin;
 
     constructor() ERC20("Token", "TKN") {
@@ -14,68 +17,79 @@ contract Token is ERC20 {
     }
 
     function mint(address to, uint256 amount) public {
+        require(msg.sender == admin);
         _mint(to, amount);
     }
 
     function burn(address from, uint256 amount) public {
+        require(msg.sender == admin);
         _burn(from, amount);
     }
 
-    function decimals() public view override returns (uint8) {
-        return 18;
-    }
 }
 
 contract LinearBondingCurve {
+    using SafeERC20 for Token;
     Token public token;
 
     uint256 public supply;
-    mapping(address => uint256) public lastPurchased;
-    uint256 public decimals;
+    uint256 public reserve;
+
+    event Bought(address indexed buyer, uint256 tokenAmount, uint256 ethPaid);
+    event Sold(address indexed seller, uint256 tokenAmount, uint256 ethReceived);
 
     constructor() {
         token = new Token();
-        decimals = 10 ** token.decimals();
     }
 
-    function buyToken(uint256 amount) public payable {
+    function buyToken(uint256 amountMin) public payable {
         uint256 currentSupply = supply;
-        supply = currentSupply + amount;
-
-        uint256 ethersToSend;
+        supply = currentSupply + amountMin;
 
         // Reserve Ratio (RR) = Reserve (R) / (Supply (S) x Price (P))
         // R = (S * P) * RR
         // R = (S * P) * 0.5
-        // S == P
-        // reserve = (currentSupply * currentSupply) * 0.5
-        // newReserve = (supply * supply) * 0.5
-        // ethersToSend = newReserve - reserve
-        // reserve = newReserve
+        // since S == P
+        // R = (S^2) * 0.5
+        reserve = ((currentSupply ** 2) / 10 ** 18) / 2;
+        uint256 newReserve = ((supply ** 2) / 10 ** 18) / 2;
+        uint256 ethersToSend = newReserve - reserve;
+        reserve = newReserve;
 
-        for (uint256 i = currentSupply / decimals + 1; i <= supply / decimals; i++) {
-            ethersToSend += i;
+        require(msg.value >= ethersToSend);
+
+        if (msg.value == ethersToSend) {
+            token.mint(msg.sender, amountMin);
+
+            emit Bought(msg.sender, amountMin, msg.value);
         }
+        else {
+            token.mint(msg.sender, amountMin);
+            (bool sent,) = msg.sender.call{value: msg.value - ethersToSend}("");
+            require(sent, "Failed to send Ether");
 
-        require(msg.value == ethersToSend * 1 ether);
-
-        token.mint(msg.sender, amount);
-        lastPurchased[msg.sender] = block.timestamp;
+            emit Bought(msg.sender, amountMin, ethersToSend);
+        }
+        
     }
 
-    function sellToken(uint256 amount) public {
-        require(block.timestamp > lastPurchased[msg.sender] + 600);
+    function sellToken(uint256 amount, uint256 minEth) public {
         uint256 currentSupply = supply;
         supply = currentSupply - amount;
 
-        uint256 ethersToSend;
-        for (uint256 i = supply / decimals + 1; i <= currentSupply / decimals; i++) {
-            ethersToSend += i;
-        }
+        reserve = ((currentSupply ** 2) / 10 ** 18) / 2;
+        uint256 newReserve = ((supply ** 2) / 10 ** 18) / 2;
+        uint256 ethersToSend = reserve - newReserve;
+        reserve = newReserve;
 
-        token.transferFrom(msg.sender, address(this), amount);
+        require(ethersToSend >= minEth);
+
+        token.safeTransferFrom(msg.sender, address(this), amount);
         token.burn(address(this), amount);
-        (bool sent,) = msg.sender.call{value: ethersToSend * 1 ether}("");
+        (bool sent,) = msg.sender.call{value: ethersToSend}("");
         require(sent, "Failed to send Ether");
+
+        emit Sold(msg.sender, amount, ethersToSend);
+
     }
 }

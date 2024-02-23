@@ -45,9 +45,24 @@ contract TokenSanctionsTest is Test {
         tokenSanctions.transfer(admin, 5 ether);
     }
 
+    function testRestrictedCannotTransferFrom() public {
+        tokenSanctions.transfer(restrictedUser, 5 ether);
+        testSetRestrictedUser();
+
+        vm.expectRevert("Restricted user cannot transfer");
+        vm.prank(restrictedUser);
+        tokenSanctions.transferFrom(restrictedUser, admin, 5 ether);
+    }
+
     function testRestrictedCannotReceive() public {
         testSetRestrictedUser();
         vm.expectRevert();
         tokenSanctions.transfer(restrictedUser, 5 ether);
+    }
+
+    function testRestrictedCannotReceiveFrom() public {
+        testSetRestrictedUser();
+        vm.expectRevert("Restricted user cannot receive");
+        tokenSanctions.transferFrom(address(this), restrictedUser, 5 ether);
     }
 }
