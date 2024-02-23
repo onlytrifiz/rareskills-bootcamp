@@ -43,6 +43,16 @@ contract LinearBondingCurve {
         supply = currentSupply + amount;
 
         uint256 ethersToSend;
+
+        // Reserve Ratio (RR) = Reserve (R) / (Supply (S) x Price (P))
+        // R = (S * P) * RR
+        // R = (S * P) * 0.5
+        // S == P
+        // reserve = (currentSupply * currentSupply) * 0.5
+        // newReserve = (supply * supply) * 0.5
+        // ethersToSend = newReserve - reserve
+        // reserve = newReserve
+
         for (uint256 i = currentSupply / decimals + 1; i <= supply / decimals; i++) {
             ethersToSend += i;
         }
