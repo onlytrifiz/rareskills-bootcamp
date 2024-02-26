@@ -4,4 +4,4 @@ Everytime an ERC721 is transferred (including mints and burns) it emits a Transf
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
 Given that all the parameters are indexed, it quite easy to query the blockchain and understand who is holding which NFT, or counting how many NFTs are currently held by an address.
 
-If I was creating a NFT marketplace, I could accomplish this simply by listening the events and, if the volume starts to grow, building an off-chain database to quickly retrieve any information, avoiding to query the blockchain multiple times per second.
+If I was creating a NFT marketplace, I could accomplish this simply by listening the events and building an off-chain database to quickly retrieve any information, avoiding to query the blockchain multiple times per second.

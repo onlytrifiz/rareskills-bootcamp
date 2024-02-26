@@ -10,19 +10,20 @@ import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Recei
 import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 contract NFT is ERC721, ERC721Royalty, Ownable2Step {
-    uint256 public maxSupply;
+    uint256 public immutable MAX_SUPPLY;
     bytes32 public immutable merkleRoot;
     BitMaps.BitMap private _airdropList;
 
     event Withdraw(address addr, uint256 amount);
+    event MerkleMint(address addr, uint256 tokenId);
 
     constructor() ERC721("NonFungibleToken", "NFT") Ownable(msg.sender) {
         _setDefaultRoyalty(address(this), 250);
-        maxSupply = 1000;
+        MAX_SUPPLY = 1000;
         merkleRoot = 0x897d6714686d83f84e94501e5d6f0f38c94b75381b88d1de3878b4f3d2d5014a;
     }
 
-    function safeMintMerkle(bytes32[] memory proof, uint256 index, address to, uint256 tokenId) public payable {
+    function safeMintMerkle(bytes32[] memory proof, uint256 index, address to, uint256 tokenId) external payable {
         require(tokenId > 0 && tokenId <= 1000 && msg.value == 0.5 ether);
         require(!BitMaps.get(_airdropList, index), "Discount already used");
 
@@ -30,15 +31,16 @@ contract NFT is ERC721, ERC721Royalty, Ownable2Step {
         require(MerkleProof.verify(proof, merkleRoot, leaf));
         BitMaps.setTo(_airdropList, index, true);
         _safeMint(to, tokenId);
+        emit MerkleMint(to, tokenId);
     }
 
-    function safeMint(address to, uint256 tokenId) public payable {
+    function safeMint(address to, uint256 tokenId) external payable {
         require(tokenId > 0 && tokenId <= 1000 && msg.value == 1 ether);
 
         _safeMint(to, tokenId);
     }
 
-    function withdrawEthers() public onlyOwner {
+    function withdrawEthers() external onlyOwner {
         uint256 amount = address(this).balance;
         (bool sent,) = owner().call{value: amount}("");
         require(sent, "Failed to send Ether");
@@ -67,7 +69,7 @@ contract Token is ERC20 {
         minter[msg.sender] = true;
     }
 
-    function mint(address account, uint256 value) public {
+    function mint(address account, uint256 value) external {
         require(minter[msg.sender]);
         _mint(account, value);
     }
@@ -97,7 +99,9 @@ contract Staking is IERC721Receiver {
         token = new Token();
     }
 
-    function deposit(address from, uint256 tokenId) public {
+    function deposit(address from, uint256 tokenId) external {
+        require(userInfo[from].amount == 0); // added after meeting
+
         nft.safeTransferFrom(from, address(this), tokenId);
     }
 
@@ -123,7 +127,7 @@ contract Staking is IERC721Receiver {
         emit Claim(msg.sender, reward);
     }
 
-    function withdraw(uint256 tokenId) public {
+    function withdraw(uint256 tokenId) external {
         require(tokenId == userInfo[msg.sender].tokenId);
         claim();
 
@@ -140,6 +144,7 @@ contract Staking is IERC721Receiver {
         override
         returns (bytes4)
     {
+        require(msg.sender == address(nft));  // added after meeting  
         _deposit(from, tokenId);
 
         return this.onERC721Received.selector;
