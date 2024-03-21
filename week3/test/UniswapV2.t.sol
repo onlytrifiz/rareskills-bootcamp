@@ -8,6 +8,7 @@ import {WETH} from "../src/WETH.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IWETH} from "../src/interfaces/IWETH.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
 import "@openzeppelin/contracts/interfaces/IERC3156FlashLender.sol";
 import '@solady/src/utils/FixedPointMathLib.sol';
@@ -373,6 +374,7 @@ contract UniswapV2Test is Test, IERC3156FlashBorrower {
     function testFlashLoan() public {
         testAddLiquidity();
 
+        token0.approve(address(pair), 2 ether);
         pair.flashLoan(IERC3156FlashBorrower(this), address(token0), 1 ether, "");
     }
 

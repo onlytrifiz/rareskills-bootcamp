@@ -8,6 +8,7 @@ import "./interfaces/IWETH.sol";
 import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Callee.sol";
 import "@solady/src/utils/FixedPointMathLib.sol";
+import "@solady/src/utils/SafeTransferLib.sol";
 import "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Test, console2} from "../lib/forge-std/src/Test.sol";
@@ -15,10 +16,11 @@ import {Test, console2} from "../lib/forge-std/src/Test.sol";
 contract Pair is LPERC20, ReentrancyGuard {
     // using SafeMath  for uint;
     using UQ112x112 for uint224;
+    using SafeTransferLib for address;
 
     uint public constant MINIMUM_LIQUIDITY = 10 ** 3;
-    bytes4 private constant SELECTOR =
-        bytes4(keccak256(bytes("transfer(address,uint256)")));
+    bytes32 private constant FLASH_LOAN = keccak256("ERC3156FlashBorrower.onFlashLoan");
+    bytes4 private constant SELECTOR = bytes4(keccak256(bytes("transfer(address,uint256)")));
 
     address public factory;
     address public token0;
@@ -114,12 +116,13 @@ contract Pair is LPERC20, ReentrancyGuard {
 
         if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
             // * never overflows, and + overflow is desired
-            price0CumulativeLast +=
-                uint(UQ112x112.encode(_reserve1).uqdiv(_reserve0)) *
-                timeElapsed;
-            price1CumulativeLast +=
-                uint(UQ112x112.encode(_reserve0).uqdiv(_reserve1)) *
-                timeElapsed;
+            unchecked {
+                price0CumulativeLast +=
+                uint(UQ112x112.encode(_reserve1).uqdiv(_reserve0)) * timeElapsed;
+                
+                price1CumulativeLast +=
+                uint(UQ112x112.encode(_reserve0).uqdiv(_reserve1)) * timeElapsed;
+            }
         }
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
@@ -199,25 +202,13 @@ contract Pair is LPERC20, ReentrancyGuard {
                 require(msg.value == amountA);
                 IWETH(WETH).deposit{value: amountA}();
             } else {
-                require(
-                    IERC20(token0).transferFrom(
-                        msg.sender,
-                        address(this),
-                        amountA
-                    )
-                );
+                token0.safeTransferFrom(msg.sender, address(this), amountA);
             }
             if (token1 == address(WETH)) {
                 require(msg.value == amountB);
                 IWETH(WETH).deposit{value: amountB}();
             } else {
-                require(
-                    IERC20(token1).transferFrom(
-                        msg.sender,
-                        address(this),
-                        amountB
-                    )
-                );
+                token1.safeTransferFrom(msg.sender, address(this), amountB);
             }
             liquidity =
                 FixedPointMathLib.sqrt(amountA * amountB) -
@@ -251,13 +242,7 @@ contract Pair is LPERC20, ReentrancyGuard {
                 (bool sent, ) = to.call{value: msg.value - amountA}("");
                 require(sent, "Failed to send Ether");
             } else {
-                require(
-                    IERC20(token0).transferFrom(
-                        msg.sender,
-                        address(this),
-                        amountA
-                    )
-                );
+                token0.safeTransferFrom(msg.sender, address(this), amountA);
             }
             if (token1 == address(WETH)) {
                 require(msg.value == amountB);
@@ -265,13 +250,7 @@ contract Pair is LPERC20, ReentrancyGuard {
                 (bool sent, ) = to.call{value: msg.value - amountB}("");
                 require(sent, "Failed to send Ether");
             } else {
-                require(
-                    IERC20(token1).transferFrom(
-                        msg.sender,
-                        address(this),
-                        amountB
-                    )
-                );
+                token1.safeTransferFrom(msg.sender, address(this), amountB);
             }
             liquidity = FixedPointMathLib.min(
                 (amountA * _totalSupply) / _reserve0,
@@ -279,8 +258,10 @@ contract Pair is LPERC20, ReentrancyGuard {
             );
             _mint(to, liquidity);
         }
+        uint balance0 = IERC20(token0).balanceOf(address(this));
+        uint balance1 = IERC20(token1).balanceOf(address(this));
 
-        _update(amountA, amountB, _reserve0, _reserve1);
+        _update(balance0, balance1, _reserve0, _reserve1);
         if (feeOn) kLast = uint(reserve0) * reserve1; // reserve0 and reserve1 are up-to-date
         emit Mint(msg.sender, amountA, amountB);
     }
@@ -327,7 +308,6 @@ contract Pair is LPERC20, ReentrancyGuard {
         uint balance0 = IERC20(_token0).balanceOf(address(this));
         uint balance1 = IERC20(_token1).balanceOf(address(this));
 
-        require(this.transferFrom(msg.sender, address(this), amountIn));
         uint liquidity = amountIn;
 
         bool feeOn = _mintFee(_reserve0, _reserve1);
@@ -342,7 +322,8 @@ contract Pair is LPERC20, ReentrancyGuard {
             amount0 > minAmountOut0 && amount1 > minAmountOut1,
             "UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED"
         );
-        _burn(address(this), liquidity);
+        _burn(msg.sender, liquidity);
+
         if (token0 == address(WETH)) {
             IWETH(WETH).withdraw(amount0);
             (bool sent, ) = to.call{value: amount0}("");
@@ -456,13 +437,7 @@ contract Pair is LPERC20, ReentrancyGuard {
             require(msg.value == amountIn);
             IWETH(WETH).deposit{value: amountIn}();
         } else {
-            require(
-                IERC20(tokenIn).transferFrom(
-                    msg.sender,
-                    address(this),
-                    amountIn
-                )
-            );
+            tokenIn.safeTransferFrom(msg.sender, address(this), amountIn);
         }
 
         uint amountOut = (_tokenIn == token0)
@@ -505,143 +480,6 @@ contract Pair is LPERC20, ReentrancyGuard {
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
-    /* function safeSwapTokensForTokens(address _tokenIn, uint amountIn, uint amountOutMin, address to) external nonReentrant {
-        require(amountIn > 0 && amountOutMin > 0, 'AMOUNT IS 0');
-        require(_tokenIn == token0 || _tokenIn == token1, 'WRONG TOKEN');
-
-        IERC20 tokenIn = (_tokenIn == token0) ? IERC20(token0) : IERC20(token1);
-        address tokenOut = (_tokenIn == token0) ? token1 : token0;
-        
-        (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-        uint balance0;
-        uint balance1;
-        // scope for _token{0,1}, avoids stack too deep errors
-        address _token0 = token0;
-        address _token1 = token1;
-        require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
-
-        
-        // MY IMPLEMENTATION
-        uint _kLast = uint(_reserve0) * _reserve1;
-        uint fee = (amountIn * 3) / 1000;
-        uint amount0In = (_tokenIn == token0) ? amountIn : 0;
-        uint amount1In = (_tokenIn == token0) ? 0 : amountIn;
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn));
-
-        uint amountOut = (_tokenIn == token0) ? _reserve1 - (_kLast / (uint(_reserve0) + amountIn - fee)) - 1 : _reserve0 - (_kLast / (uint(_reserve1) + amountIn - fee)) - 1;
-        console2.log("amountOut", amountOut);
-        require(amountOut >= amountOutMin, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');
-        _safeTransfer(tokenOut, to, amountOut);
-        uint amount0Out = (_tokenIn == token0) ? 0 : amountOut;
-        uint amount1Out = (_tokenIn == token0) ? amountOut : 0;
-        require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
-
-
-        balance0 = IERC20(_token0).balanceOf(address(this));
-        balance1 = IERC20(_token1).balanceOf(address(this));
-        
-        { // scope for reserve{0,1}Adjusted, avoids stack too deep errors
-        uint balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
-        uint balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
-        require(balance0Adjusted * balance1Adjusted >= (uint(_reserve0) * _reserve1) * 1000**2, 'UniswapV2: K');
-        }
-
-        _update(balance0, balance1, _reserve0, _reserve1);
-        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
-    } 
-
-    /* function safeSwapETHForTokens(uint amountOutMin, address to) external payable nonReentrant {
-        require(msg.value > 0 && amountOutMin > 0, 'AMOUNT IS 0');
-        require(WETH == token0 || WETH == token1, 'WRONG TOKEN');
-
-        IWETH(WETH).deposit{value: msg.value}();
-        address tokenOut = (WETH == token0) ? token1 : token0;
-        
-        (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-        uint balance0;
-        uint balance1;
-        // scope for _token{0,1}, avoids stack too deep errors
-        address _token0 = token0;
-        address _token1 = token1;
-        require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
-
-        
-        // MY IMPLEMENTATION
-        uint _kLast = uint(_reserve0) * _reserve1;
-        uint fee = (msg.value * 3) / 1000;
-        uint amount0In = (WETH == token0) ? msg.value : 0;
-        uint amount1In = (WETH == token0) ? 0 : msg.value;
-
-        uint amountOut = (WETH == token0) ? _reserve1 - (_kLast / (uint(_reserve0) + msg.value - fee)) - 1 : _reserve0 - (_kLast / (uint(_reserve1) + msg.value - fee)) - 1;
-        console2.log("amountOut", amountOut);
-        require(amountOut >= amountOutMin, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');
-        _safeTransfer(tokenOut, to, amountOut);
-        uint amount0Out = (WETH == token0) ? 0 : amountOut;
-        uint amount1Out = (WETH == token0) ? amountOut : 0;
-        require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
-
-
-        balance0 = IERC20(_token0).balanceOf(address(this));
-        balance1 = IERC20(_token1).balanceOf(address(this));
-        
-        { // scope for reserve{0,1}Adjusted, avoids stack too deep errors
-        uint balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
-        uint balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
-        console2.log("balance0Adjusted * balance1Adjusted", balance0Adjusted * balance1Adjusted);
-        console2.log("(uint(_reserve0) * _reserve1) * 1000**2", (uint(_reserve0) * _reserve1) * 1000**2);
-        require(balance0Adjusted * balance1Adjusted >= (uint(_reserve0) * _reserve1) * 1000**2, 'UniswapV2: K');
-        }
-
-        _update(balance0, balance1, _reserve0, _reserve1);
-        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
-    }
-
-    /* function safeSwapTokensforETH(uint amountIn, uint amountOutMin, address to) external nonReentrant {
-        require(amountIn > 0 && amountOutMin > 0, 'AMOUNT IS 0');
-        require(WETH == token0 || WETH == token1, 'WRONG TOKEN');
-
-        IERC20 tokenIn = (WETH == token0) ? IERC20(token1) : IERC20(token0);
-        
-        (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
-        uint balance0;
-        uint balance1;
-        // scope for _token{0,1}, avoids stack too deep errors
-        address _token0 = token0;
-        address _token1 = token1;
-        require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
-
-        
-        // MY IMPLEMENTATION
-        uint _kLast = uint(_reserve0) * _reserve1;
-        uint fee = (amountIn * 3) / 1000;
-        uint amount0In = (WETH == token0) ? 0 : amountIn;
-        uint amount1In = (WETH == token0) ? amountIn : 0;
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn));
-
-        uint amountOut = (WETH == token1) ? _reserve1 - (_kLast / (uint(_reserve0) + amountIn - fee)) - 1 : _reserve0 - (_kLast / (uint(_reserve1) + amountIn - fee)) - 1;
-        console2.log("amountOut: ", amountOut);
-        require(amountOut >= amountOutMin, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');
-        
-        IWETH(WETH).withdraw(amountOut);
-        (bool sent, ) = to.call{value: amountOut}("");
-        require(sent, "Failed to send Ether");
-
-        uint amount0Out = (WETH == token0) ? amountOut : 0;
-        uint amount1Out = (WETH == token0) ? 0 : amountOut;
-        require(amount0Out < _reserve0 && amount1Out < _reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
-
-        balance0 = IERC20(_token0).balanceOf(address(this));
-        balance1 = IERC20(_token1).balanceOf(address(this));
-        
-        { // scope for reserve{0,1}Adjusted, avoids stack too deep errors
-        uint balance0Adjusted = (balance0 * 1000) - (amount0In * 3);
-        uint balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
-        require(balance0Adjusted * balance1Adjusted >= (uint(_reserve0) * _reserve1) * 1000**2, 'UniswapV2: K');
-        }
-
-        _update(balance0, balance1, _reserve0, _reserve1);
-        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
-    } */
 
     // force balances to match reserves
     function skim(address to) external nonReentrant {
@@ -685,7 +523,7 @@ contract Pair is LPERC20, ReentrancyGuard {
     function _flashFee(address token, uint256 amount) internal view returns (uint256) {
         require(token == token0 || token == token1);
         require(amount <= IERC20(token).balanceOf(address(this)));
-        return (amount * 999) / 1000;
+        return (amount * 3) / 1000;
     }
 
     function flashLoan(
@@ -693,7 +531,7 @@ contract Pair is LPERC20, ReentrancyGuard {
         address token,
         uint256 amount,
         bytes calldata data
-    ) external returns (bool) {
+    ) external nonReentrant returns (bool) {
         require(token == token0 || token == token1);
         require(amount <= IERC20(token).balanceOf(address(this)));
 
@@ -701,9 +539,9 @@ contract Pair is LPERC20, ReentrancyGuard {
         uint fee = _flashFee(token, amount);
         _safeTransfer(token, address(receiver), amount);
 
-        require(receiver.onFlashLoan(msg.sender, token, amount, fee, data) == keccak256("ERC3156FlashBorrower.onFlashLoan"));
+        require(receiver.onFlashLoan(msg.sender, token, amount, fee, data) == FLASH_LOAN);
 
-        require(IERC20(token).transferFrom(address(receiver), address(this), amount + fee));
+        token.safeTransferFrom(address(receiver), address(this), amount + fee);
         require(IERC20(token).balanceOf(address(this)) >= balance + fee);
         return true;
     }
